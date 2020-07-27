@@ -22,7 +22,7 @@ public class UserController {
 	@Autowired
 	private UserDao userDao;
 	
-	@GetMapping(value = "select")
+	@GetMapping(value = "/get")
 	public String getStringList() {
 		return "测试发布成功";
 	}
