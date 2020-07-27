@@ -24,7 +24,7 @@ public class UserController {
 	
 	@GetMapping(value = "/get")
 	public String getStringList() {
-		return "测试发布成功";
+		return "测试发布成功，为了测试自动部署是否成功";
 	}
 	
 	@GetMapping(value = "select")
