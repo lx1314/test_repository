@@ -23,6 +23,11 @@ public class UserController {
 	private UserDao userDao;
 	
 	@GetMapping(value = "select")
+	public String getStringList() {
+		return "测试发布成功";
+	}
+	
+	@GetMapping(value = "select")
 	public List<User> finActivityEntity() {
 		return userDao.selectAll();
 	}
