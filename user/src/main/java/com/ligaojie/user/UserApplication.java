@@ -4,8 +4,9 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.cloud.client.discovery.EnableDiscoveryClient;
 
-@SpringBootApplication
+@SpringBootApplication(scanBasePackages = {"com.ligaojie.user"})
 @EnableDiscoveryClient
+//@MapperScan(basePackages = "com.ligaojie.user.mapper")
 public class UserApplication {
 
 	public static void main(String[] args) {

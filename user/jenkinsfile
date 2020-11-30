@@ -1,0 +1,180 @@
+pipeline {
+    agent any
+
+    environment {
+        USER_EMAIL = "chao.li2@baozun.com"
+        USER = "chao.li2"
+    }
+
+    parameters {
+        string(name: 'pomPath', defaultValue: 'pom.xml', description: 'pom.xml的相对路径')
+    }
+
+    //pipeline运行结果通知给触发者
+    post {
+        success {
+            script {
+                wrap([$class: 'BuildUser']) {
+                    emailext body: '$DEFAULT_CONTENT', recipientProviders: [developers()], mimeType: 'text/html', subject: '$DEFAULT_SUBJECT', to: "$USER_EMAIL"
+                }
+            }
+        }
+        failure {
+            script {
+                wrap([$class: 'BuildUser']) {
+                    emailext body: '$DEFAULT_CONTENT', recipientProviders: [developers()], mimeType: 'text/html', subject: '$DEFAULT_SUBJECT', to: "$USER_EMAIL"
+                    }
+            }
+
+        }
+        unstable {
+            script {
+                wrap([$class: 'BuildUser']) {
+                    emailext body: '$DEFAULT_CONTENT', recipientProviders: [developers()], mimeType: 'text/html', subject: '$DEFAULT_SUBJECT', to: "$USER_EMAIL"
+                }
+            }
+        }
+        aborted {
+            script {
+                wrap([$class: 'BuildUser']) {
+                    emailext body: '$DEFAULT_CONTENT', recipientProviders: [developers()], mimeType: 'text/html', subject: '$DEFAULT_SUBJECT', to: "$USER_EMAIL"
+                }
+            }
+        }
+    }
+    stages {
+        stage('单元测试') {
+           when { anyOf { branch 'coding'; branch 'dev' } }
+          steps {
+                echo "starting unitTest......"
+                echo "USER_EMAIL:${USER_EMAIL}"
+                echo "JOB_NAME:${JOB_NAME}"
+                echo "BUILD_NUMBER:${BUILD_NUMBER}"
+                echo "USER:${USER}"
+                echo "JOB_NAME:${JOB_NAME}"
+                echo "BUILD_NUMBER:${BUILD_NUMBER}"
+                //注入jacoco插件配置,clean test执行单元测试代码. All tests should pass.
+                sh "mvn clean"
+                sh "mvn org.jacoco:jacoco-maven-plugin:prepare-agent -f ${params.pomPath} clean test -Dautoconfig.skip=true -Dmaven.test.skip=false -Dmaven.test.failure.ignore=true"
+                junit '**/target/surefire-reports/*.xml'
+                //配置单元测试覆盖率要求，未达到要求pipeline将会fail,code coverage.LineCoverage>20%.
+                jacoco changeBuildStatus: true, maximumLineCoverage: "${params.lineCoverage}"
+           }
+        }
+        stage('静态检查') {
+            when { anyOf { branch 'coding'; branch 'dev' } }
+            steps {
+                echo "starting codeAnalyze with SonarQube......"
+                //sonar:sonar.QualityGate should pass
+                withSonarQubeEnv('sonarserver') {
+                    //固定使用项目根目录${basedir}下的pom.xml进行代码检查
+                    //sh "/usr/local/sonar-scanner/bin/sonar-scanner "
+                    sh '''dirSrc=`ls -m $WORKSPACE/**/target/jacoco.exec|tr -d " "`
+                    mvn -f pom.xml sonar:sonar -Dsonar.login=rui.li -Dsonar.password=123456 -Dsonar.core.codeCoveragePlugin=jacoco -Dsonar.jacoco.reportPaths="$dirSrc" -Dsonar.dynamicAnalysis=reuseReports'''
+
+                }
+                script {
+                    timeout(2) {
+                        //利用sonar webhook功能通知pipeline代码检测结果，未通过质量阈，pipeline将会fail
+                        def qg = waitForQualityGate()
+                        echo "${qg.status}"
+                        if (qg.status != 'OK') {
+                           echo "${qg.status}"
+                           error "未通过Sonarqube的代码质量阈检查，请及时修改！failure: ${qg.status}"
+                       }
+                  }
+              }
+          }
+       }
+        stage('Package') {
+            steps {
+                sh "chmod +x  Package.sh"
+                sh "sh -x Package.sh Package"
+            }
+        }
+        stage('Publish') {
+            steps {
+                sh "sh -x Package.sh Publish"
+            }
+        }
+
+        stage('Deploy SIT') {
+            when { branch 'dev' }
+            steps {
+                timeout(time: 5, unit: 'MINUTES') {
+                    input message: 'Do you approve deploy SIT?'
+                    sh " sed -i 's/member:latest/member:${GIT_COMMIT.substring(0, 7)}/g'  ./kubernetes/kubernetes-config-sit.yaml "
+                    sh "kubectl apply -f ./kubernetes/kubernetes-config-sit.yaml"
+                }
+            }
+
+        }
+        stage('Deploy UAT') {
+            when { branch 'release' }
+            steps {
+                timeout(time: 5, unit: 'MINUTES') {
+                    input message: 'Do you approve deploy UAT?'
+                    sh " sed -i 's/member:latest/member:${GIT_COMMIT.substring(0, 7)}/g'  ./kubernetes/kubernetes-config-uat.yaml "
+                    sh "kubectl apply -f ./kubernetes/kubernetes-config-uat.yaml"
+
+                }
+            }
+        }
+
+        stage('Deploy UAT-HOTFIX'){
+            when {branch 'hotfix'}
+            steps{
+                timeout(time: 5, unit: 'MINUTES'){
+                    script{
+                        def deploy = true
+                        try{
+                            input message: 'Do you approve deploy UAT-HOTFIX?', ok: '发布'
+                       }catch(e){
+                            deploy =false
+                            println "Abort"
+                       }
+
+                        if(deploy){
+                            sh " sed -i 's/member:latest/member:${GIT_COMMIT.substring(0, 7)}/g'  ./kubernetes/kubernetes-config-uat.yaml "
+                            sh "kubectl apply -f ./kubernetes/kubernetes-config-uat.yaml"
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Deploy GREY') {
+            when { branch 'master' }
+            steps {
+                timeout(time: 5, unit: 'MINUTES') {
+                    input message: 'Do you approve deploy GREY?'
+                    sh " sed -i 's/member:latest/member:${GIT_COMMIT.substring(0, 7)}/g'  ./kubernetes/kubernetes-config-grey.yaml "
+                    sh "kubectl apply -f ./kubernetes/kubernetes-config-grey.yaml"
+                }
+            }
+        }
+        stage('Deploy SANDBOX') {
+            when { branch 'master' }
+            steps {
+                timeout(time: 5, unit: 'MINUTES') {
+                    input message: 'Do you approve deploy SANDBOX?'
+                    sh " sed -i 's/member:latest/member:${GIT_COMMIT.substring(0, 7)}/g'  ./kubernetes/kubernetes-config-sandbox.yaml "
+                    sh "kubectl apply -f ./kubernetes/kubernetes-config-sandbox.yaml"
+                }
+            }
+        }
+        stage('Deploy PROD') {
+            when { branch 'master' }
+            steps {
+                timeout(time: 5, unit: 'MINUTES') {
+                    input message: 'Do you approve deploy PROD?'
+                    sh " sed -i 's/member:latest/member:${GIT_COMMIT.substring(0, 7)}/g'  ./kubernetes/kubernetes-config-prod.yaml "
+                    sh "kubectl apply -f ./kubernetes/kubernetes-config-prod.yaml"
+                }
+            }
+        }
+
+    }
+}
+
+
